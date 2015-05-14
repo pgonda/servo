@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+extern crate time;
+use time::Timespec;
 
 use dom::bindings::cell::DOMRefCell;
 use dom::bindings::callback::ExceptionHandling::Report;
@@ -22,9 +24,10 @@ use std::borrow::ToOwned;
 use std::cell::Cell;
 use std::cmp;
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Sender};
-use std::sync::mpsc::Select;
 use std::hash::{Hash, Hasher};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::Select;
+use std::thread;
 
 #[derive(PartialEq, Eq)]
 #[jstraceable]
@@ -243,3 +246,58 @@ impl TimerManager {
     }
 }
 
+pub enum TimerRequest {
+    Add { timeout: u32, tx: Sender<TimerResponse> },
+    Remove { id: u32 },
+}
+
+pub enum TimerResponse {
+    Timeout,
+}
+
+pub struct Timer {
+    creation_time: Timespec,
+    expiry_time: Timespec,
+    tx: Sender<TimerResponse>,
+}
+
+pub struct TimerEventLoop {
+    timers: Vec<Timer>,
+    control_port: Receiver<TimerRequest>,
+}
+
+impl TimerEventLoop {
+    pub fn start() -> Sender<TimerRequest> {
+        let (tx, rx) = channel::<TimerRequest>();
+        let event_loop = TimerEventLoop { timers: Vec::new(), control_port: rx };
+        thread::spawn( move || {
+            let timeout = u32::max_value();
+            let select = Select::new();
+            let timeout_port = horribly_inefficient_timers::oneshot(timeout);
+            let mut timeout_handle = select.handle(&timeout_port);
+            unsafe { timeout_handle.add() };
+            let mut control_handle = select.handle(&event_loop.control_port);
+            unsafe { control_handle.add() };
+
+            loop {
+                let id = select.wait();
+
+                if id == timeout_handle.id() {
+                    timeout_handle.recv().unwrap();
+                    let curr_time = time::get_time();
+                    for timer in event_loop.timers.iter() {
+                        match timer.expiry_time.cmp(&curr_time) {
+                            _ => break,
+                        }
+                    }
+                } else if id ==control_handle.id() {
+                    let int = match control_handle.recv().unwrap() {
+                        TimerRequest::Add{timeout, tx} => 1,
+                        TimerRequest::Remove{id} => 2,
+                    };
+                }
+            }
+        });
+        tx
+    }
+}
