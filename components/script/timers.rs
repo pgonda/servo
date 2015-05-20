@@ -23,7 +23,7 @@ use js::jsval::JSVal;
 use std::borrow::ToOwned;
 use std::cell::Cell;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::mpsc::Select;
@@ -259,7 +259,9 @@ pub struct Timer {
     creation_time: Timespec,
     expiry_time: Timespec,
     tx: Sender<TimerResponse>,
+    id: u32,
 }
+
 
 pub struct TimerEventLoop {
     timers: Vec<Timer>,
@@ -267,14 +269,16 @@ pub struct TimerEventLoop {
 }
 
 impl TimerEventLoop {
+    #[allow(unsafe_code)]
     pub fn start() -> Sender<TimerRequest> {
         let (tx, rx) = channel::<TimerRequest>();
-        let event_loop = TimerEventLoop { timers: Vec::new(), control_port: rx };
+        let mut event_loop = TimerEventLoop { timers: Vec::new(), control_port: rx };
         thread::spawn( move || {
             let timeout = u32::max_value();
             let select = Select::new();
-            let timeout_port = horribly_inefficient_timers::oneshot(timeout);
+            let mut timeout_port = horribly_inefficient_timers::oneshot(timeout);
             let mut timeout_handle = select.handle(&timeout_port);
+            let mut timers: Vec<Timer> = Vec::new();
             unsafe { timeout_handle.add() };
             let mut control_handle = select.handle(&event_loop.control_port);
             unsafe { control_handle.add() };
@@ -285,11 +289,21 @@ impl TimerEventLoop {
                 if id == timeout_handle.id() {
                     timeout_handle.recv().unwrap();
                     let curr_time = time::get_time();
-                    for timer in event_loop.timers.iter() {
-                        match timer.expiry_time.cmp(&curr_time) {
-                            _ => break,
-                        }
+                    let (expired_timers, mut saved_timers): (Vec<Timer>, Vec<Timer>) =
+                        timers.into_iter().partition(|t| t.creation_time.cmp(&curr_time) != cmp::Ordering::Greater);
+                    for timer in expired_timers.iter() {
+                        timer.tx.send(TimerResponse::Timeout);
                     }
+                    if saved_timers.len() != 0 {
+                        saved_timers.sort_by(|a, b| a.creation_time.cmp(&b.creation_time));
+                        let timer = saved_timers.get(0).unwrap();
+                        let timeout_port = horribly_inefficient_timers::oneshot(timeout);
+                    } else {
+                        let timeout_port = horribly_inefficient_timers::oneshot(timeout);
+                    }
+                   timeout_handle = select.handle(&timeout_port);
+                    unsafe { timeout_handle.add() };
+                    timers = saved_timers;
                 } else if id ==control_handle.id() {
                     let int = match control_handle.recv().unwrap() {
                         TimerRequest::Add{timeout, tx} => 1,
