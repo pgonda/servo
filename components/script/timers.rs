@@ -262,6 +262,11 @@ pub struct Timer {
     id: u32,
 }
 
+impl Timer {
+    pub fn timespec_to_ms(ts: Timespec) {
+        return ts.sec*1000 + ts.nsec/1000000;
+    }
+}
 
 pub struct TimerEventLoop {
     timers: Vec<Timer>,
@@ -295,7 +300,7 @@ impl TimerEventLoop {
                         timer.tx.send(TimerResponse::Timeout);
                     }
                     if saved_timers.len() != 0 {
-                        saved_timers.sort_by(|a, b| a.creation_time.cmp(&b.creation_time));
+                        saved_timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
                         let timer = saved_timers.get(0).unwrap();
                         let timeout_port = horribly_inefficient_timers::oneshot(timeout);
                     } else {
@@ -306,7 +311,20 @@ impl TimerEventLoop {
                     timers = saved_timers;
                 } else if id ==control_handle.id() {
                     let int = match control_handle.recv().unwrap() {
-                        TimerRequest::Add{timeout, tx} => 1,
+                        TimerRequest::Add{timeout, tx} => {
+                            let curr_time = time::get_time();
+                            let duration_to_timeout = time::Duration::milliseconds(timeout);
+                            let timeout = curr_time.clone().add(duration_to_timeout as i64);
+                            let timer = Timer { creation_time: curr_time, expiry_time: timeout, tx: tx, id: 1 };
+                            if (timers.len() != 0) & (timers.get(0).unwrap().expiry_time.cmp(&timer.expiry_time) == cmp::Ordering::Greater) {
+                                let timeout_port = horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timer.expiry_time));
+                                timeout_handle = select.handle(&timeout_port);
+                                unsafe { timeout_handle.add() };
+                            }
+                            timers.push(timer);
+                            timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
+                            1
+                        },
                         TimerRequest::Remove{id} => 2,
                     };
                 }
