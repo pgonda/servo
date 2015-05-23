@@ -307,7 +307,7 @@ impl TimerEventLoop {
                     } else {
                         let timeout_port = horribly_inefficient_timers::oneshot(timeout);
                     }
-                    timeout_handle = select.handle(&timeout_port);
+                   timeout_handle = select.handle(&timeout_port);
                     unsafe { timeout_handle.add() };
                     timers = saved_timers;
                 } else if id ==control_handle.id() {
