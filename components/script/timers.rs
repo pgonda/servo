@@ -269,78 +269,68 @@ impl Timer {
     }
 }
 
-pub struct TimerEventLoop {
-    timers: Vec<Timer>,
-    control_port: Receiver<TimerRequest>,
-}
+#[allow(unsafe_code)]
+pub fn create_thread() -> Sender<TimerRequest> {
+    let (tx, rx) = channel::<TimerRequest>();
+    thread::spawn( move || {
+        let MAX_TIMEOUT: u32 = u32::max_value();
+        let mut timer_source = Some(horribly_inefficient_timers::oneshot(MAX_TIMEOUT));
+        let mut timers: Vec<Timer> = Vec::new();
+        let mut control_port = rx;
 
-impl TimerEventLoop {
-    #[allow(unsafe_code)]
-    pub fn start() -> Sender<TimerRequest> {
-        let (tx, rx) = channel::<TimerRequest>();
-        let mut event_loop = TimerEventLoop { timers: Vec::new(), control_port: rx };
-        thread::spawn( move || {
-            let timeout = u32::max_value();
-            let mut timer_source = Some(horribly_inefficient_timers::oneshot(timeout));
-            let mut timers = event_loop.timers;
-            let mut control_port = event_loop.control_port;
-
-            loop {
-                let select = Select::new();
-                let mut timeout_port = match timer_source.take() {
-                    Some(timer_source) => timer_source,
-                    None => horribly_inefficient_timers::oneshot(timeout),
-                };
-                let mut timeout_handle = select.handle(&timeout_port);
-                let mut control_handle = select.handle(&control_port);
-                unsafe {
-                    timeout_handle.add();
-                    control_handle.add();
-                }
-
-                let id = select.wait();
-
-                if id == timeout_handle.id() {
-                    timeout_handle.recv().unwrap();
-                    let curr_time = time::get_time();
-                    let (expired_timers, mut saved_timers): (Vec<Timer>, Vec<Timer>) =
-                        timers.into_iter().partition(|t| t.creation_time.cmp(&curr_time) != cmp::Ordering::Greater);
-                    for timer in expired_timers.iter() {
-                        timer.tx.send(TimerResponse::Timeout);
-                    }
-                    if saved_timers.len() != 0 {
-                        saved_timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
-                        let timer = saved_timers.get(0).unwrap();
-                        timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timer.expiry_time)));
-                    } else {
-                        timer_source = Some(horribly_inefficient_timers::oneshot(timeout));
-                    }
-                    timers = saved_timers;
-                } else if id == control_handle.id() {
-                    match control_handle.recv().unwrap() {
-                        TimerRequest::Add{timeout, tx} => {
-                            let curr_time = time::get_time();
-                            let duration_to_timeout = time::Duration::milliseconds(timeout as i64);
-                            let timeout = curr_time.clone().add(duration_to_timeout);
-                            let timer = Timer { creation_time: curr_time, expiry_time: timeout, tx: tx, id: 1 };
-                            timers.push(timer);
-                            timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
-                            if timers.len() != 0 {
-                                timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timers.get(0).unwrap().expiry_time)));
-                            }
-                        },
-                        TimerRequest::Remove{id} => {
-                            let (removed_timers, saved_timers): (Vec<Timer>, Vec<Timer>) =
-                                timers.into_iter().partition(|t| t.id == id);
-                            timers = saved_timers;
-                            if timers.len() != 0 {
-                                timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timers.get(0).unwrap().expiry_time)));
-                            }
-                        },
-                    };
-                }
+        loop {
+            let select = Select::new();
+            let mut timeout_port = match timer_source.take() {
+                Some(timer_source) => timer_source,
+                None => horribly_inefficient_timers::oneshot(MAX_TIMEOUT),
+            };
+            let mut timeout_handle = select.handle(&timeout_port);
+            let mut control_handle = select.handle(&control_port);
+            unsafe {
+                timeout_handle.add();
+                control_handle.add();
             }
-        });
-        tx
-    }
+
+            let id = select.wait();
+
+            if id == timeout_handle.id() {
+                timeout_handle.recv().unwrap();
+                let curr_time = time::get_time();
+                let (expired_timers, mut saved_timers): (Vec<Timer>, Vec<Timer>) =
+                                                         timers.into_iter().partition(|t| t.creation_time.cmp(&curr_time) != cmp::Ordering::Greater);
+                for timer in expired_timers.iter() {
+                    timer.tx.send(TimerResponse::Timeout);
+                }
+                if saved_timers.len() != 0 {
+                    saved_timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
+                    let timer = saved_timers.get(0).unwrap();
+                    timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timer.expiry_time)));
+                }
+                timers = saved_timers;
+            } else if id == control_handle.id() {
+                match control_handle.recv().unwrap() {
+                    TimerRequest::Add{timeout, tx} => {
+                        let curr_time = time::get_time();
+                        let duration_to_timeout = time::Duration::milliseconds(timeout as i64);
+                        let timeout = curr_time.clone().add(duration_to_timeout);
+                        let timer = Timer { creation_time: curr_time, expiry_time: timeout, tx: tx, id: 1 };
+                        timers.push(timer);
+                        timers.sort_by(|a, b| a.expiry_time.cmp(&b.expiry_time));
+                        if timers.len() != 0 {
+                            timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timers.get(0).unwrap().expiry_time)));
+                        }
+                    },
+                    TimerRequest::Remove{id} => {
+                        let (removed_timers, saved_timers): (Vec<Timer>, Vec<Timer>) =
+                                                             timers.into_iter().partition(|t| t.id == id);
+                        timers = saved_timers;
+                        if timers.len() != 0 {
+                            timer_source = Some(horribly_inefficient_timers::oneshot(Timer::timespec_to_ms(timers.get(0).unwrap().expiry_time)));
+                        }
+                    },
+                };
+            }
+        }
+    });
+    tx
 }

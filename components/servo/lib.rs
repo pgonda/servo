@@ -55,6 +55,7 @@ use profile::mem as profile_mem;
 use profile::time as profile_time;
 use profile_traits::mem;
 use profile_traits::time;
+use script::timers;
 use util::opts;
 
 use std::rc::Rc;
@@ -155,6 +156,7 @@ fn create_constellation(opts: opts::Opts,
     let image_cache_task = new_image_cache_task(resource_task.clone());
     let font_cache_task = FontCacheTask::new(resource_task.clone());
     let storage_task: StorageTask = StorageTaskFactory::new();
+    let timer_chan = timers::create_thread();
 
     let constellation_chan = Constellation::<layout::layout_task::LayoutTask,
     script::script_task::ScriptTask>::start(

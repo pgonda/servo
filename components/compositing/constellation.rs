@@ -9,6 +9,7 @@
 //! navigation context, each `Pipeline` encompassing a `ScriptTask`,
 //! `LayoutTask`, and `PaintTask`.
 
+
 use pipeline::{Pipeline, CompositionPipeline};
 
 use compositor_task::CompositorProxy;
@@ -44,6 +45,7 @@ use std::marker::PhantomData;
 use std::mem::replace;
 use std::sync::mpsc::{Sender, Receiver, channel};
 use style::viewport::ViewportConstraints;
+use script::timers;
 use url::Url;
 use util::cursor::Cursor;
 use util::geometry::PagePx;
@@ -125,7 +127,8 @@ pub struct Constellation<LTF, STF> {
     clipboard_ctx: ClipboardContext,
 
     /// Bits of state used to interact with the webdriver implementation
-    webdriver: WebDriverData
+    webdriver: WebDriverData,
+
 }
 
 /// Stores the navigation context for a single frame in the frame tree.
